@@ -1,0 +1,9 @@
+ARG  BASE=ubuntu:19.04
+FROM $BASE
+ARG  ARCH=amd64
+RUN apt-get -y update \
+    && apt-get -y install openvswitch-common libpcap0.8 libxml2 libvirt0 \
+    && rm -rf /var/lib/apt/lists/*
+COPY skydive-flow-exporter.$ARCH /usr/bin/skydive-flow-exporter
+COPY skydive-flow-exporter.yml /etc/skydive-flow-exporter.yml
+ENTRYPOINT ["/usr/bin/skydive-flow-exporter", "/etc/skydive-flow-exporter.yml"]

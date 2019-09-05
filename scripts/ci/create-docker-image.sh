@@ -9,6 +9,8 @@ set -e
 # arm64 waiting on  golang 1.11 (https://github.com/skydive-project/skydive/pull/1188#discussion_r204336060)
 : ${DOCKER_IMAGE:=skydive/skydive}
 : ${DOCKER_IMAGE_SNAPSHOT:=skydive/snapshots}
+: ${DOCKER_FLOW_EXPORTER_IMAGE:=skydive/skydive-flow-exporter}
+: ${DOCKER_FLOW_EXPORTER_IMAGE_SNAPSHOT:=skydive/skydive-flow-exporter-snapshots}
 : ${DOCKER_USERNAME:=skydiveproject}
 : ${REF:=latest}
 
@@ -53,8 +55,8 @@ docker_skydive_builder() {
     local dockerfile=$2
 
     # create docker image of builder and build skydive
-    local tag=skydive-compile
-    local image=skydive-compile-build
+    local tag=skydive-compile-$arch
+    local image=skydive-compile-build-$arch
     local uid=$( id -u )
     docker build -t $tag \
         ${TARGET_ARCH:+--build-arg TARGET_ARCH=${TARGET_ARCH}} \
@@ -73,10 +75,17 @@ docker_skydive_builder() {
         --volume $GOBUILD_VOL:$GOBUILD_DIR \
         $tag
 
-    # copy skydive executable our of builder docker image
+    # copy skydive executable out of builder docker image
     local src=/root/go/bin/${TARGET_GOARCH:+linux_${TARGET_GOARCH}/}skydive
     local dst=$DOCKER_DIR/skydive.$arch
     docker cp $image:$src $dst
+    # copy skydive-flow-exporter executable and config out of builder docker image
+    local exporter_src=$TOPLEVEL_DIR/contrib/exporters/allinone/allinone
+    local exporter_dst=$DOCKER_DIR/skydive-flow-exporter.$arch
+    docker cp $image:$exporter_src $exporter_dst
+    local exporter_config_src=$TOPLEVEL_DIR/contrib/exporters/allinone/allinone.yml.default
+    local exporter_config_dst=$DOCKER_DIR/skydive-flow-exporter.yml
+    docker cp $image:$exporter_config_src $exporter_config_dst
     docker rm $image
 }
 
@@ -97,11 +106,29 @@ docker_skydive_target() {
     fi
 }
 
+docker_skydive_flow_exporter_target() {
+    local arch=$1
+    local dockerfile=$2
+
+    # build target skydive docker image
+    local image=$( docker_flow_exporter_image ${arch} )
+    docker build -t $image \
+        --label "Version=${VERSION}" \
+        --build-arg ARCH=$arch \
+        ${BASE:+--build-arg BASE=${BASE}} \
+        -f $DOCKER_DIR/$dockerfile $DOCKER_DIR
+    if [ "$VERSION" = latest ]; then
+        local image_snapshot=$( docker_flow_exporter_image_snapshot ${arch} )
+        docker tag $image $image_snapshot
+    fi
+}
+
 docker_native_build() {
     local arch=$1
 
     docker_skydive_builder $arch Dockerfile.compile
     docker_skydive_target $arch Dockerfile
+    docker_skydive_flow_exporter_target $arch Dockerfile.skydive-flow-exporter
 }
 
 docker_cross_build() {
@@ -109,6 +136,7 @@ docker_cross_build() {
 
     docker_skydive_builder $arch Dockerfile.crosscompile
     docker_skydive_target $arch Dockerfile
+    docker_skydive_flow_exporter_target $arch Dockerfile.skydive-flow-exporter
 }
 
 docker_build() {
@@ -156,6 +184,16 @@ docker_image_snapshot() {
     echo ${DOCKER_IMAGE_SNAPSHOT}:$( docker_tag_snapshot ${arch} )
 }
 
+docker_flow_exporter_image() {
+    local arch=$1
+    echo ${DOCKER_FLOW_EXPORTER_IMAGE}:$( docker_tag ${arch} )
+}
+
+docker_flow_exporter_image_snapshot() {
+    local arch=$1
+    echo ${DOCKER_FLOW_EXPORTER_IMAGE_SNAPSHOT}:$( docker_tag_snapshot ${arch} )
+}
+
 docker_inspect() {
     local arch=$1
     docker inspect --format='{{index .RepoDigests 0}}' $( docker_image ${arch} )
@@ -165,8 +203,10 @@ docker_push() {
     for arch in $ARCHES
     do
         docker push $( docker_image ${arch} )
+        docker push $( docker_flow_exporter_image ${arch} )
         if [ "$VERSION" = latest ]; then
             docker push $( docker_image_snapshot ${arch} )
+            docker push $( docker_flow_exporter_image_snapshot ${arch} )
         fi
     done
 }
@@ -200,8 +240,10 @@ docker_manifest_create_and_push() {
 
 docker_manifest() {
     docker_manifest_create_and_push ${DOCKER_IMAGE}:${DOCKER_TAG}
+    docker_manifest_create_and_push ${DOCKER_FLOW_EXPORTER_IMAGE}:${DOCKER_TAG}
     if [ "$VERSION" = latest ]; then
         docker_manifest_create_and_push ${DOCKER_IMAGE_SNAPSHOT}:${DOCKER_TAG_SNAPSHOT}
+        docker_manifest_create_and_push ${DOCKER_FLOW_EXPORTER_IMAGE_SNAPSHOT}:${DOCKER_TAG_SNAPSHOT}
     fi
 }
 
